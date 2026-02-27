@@ -1,0 +1,16 @@
+# Logs
+*.log
+
+# Progress tracking
+progress.json
+deploy_progress.json
+update_progress.json
+fix_endpoint_names_progress.json
+
+# Generated data
+journal_descriptions.json
+
+# Python
+__pycache__/
+*.pyc
+
