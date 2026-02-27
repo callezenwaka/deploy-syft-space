@@ -14,3 +14,4 @@ journal_descriptions.json
 __pycache__/
 *.pyc
 
+.env

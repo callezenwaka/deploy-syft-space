@@ -1,151 +1,140 @@
-# Cambridge Journal Deployment Manager
+# Syft Space Deploy
 
-Consolidated CLI for deploying Cambridge journal datasets and endpoints to Syft Space.
+Generic CLI for deploying datasets and endpoints to Syft Space. Auto-discovers datasets from a directory (each subdirectory = one dataset) and creates corresponding Syft datasets + RAG endpoints.
 
 ## Prerequisites
 
-- Syft Space running on `http://localhost:8080`
-- API key configured (default: `fancy_api_key_874658643543`)
-- Journal data at `/home/azureuser/datasets/cambridge_loader/`
-- Journal descriptions in `journal_descriptions.json` (generated separately)
+- Syft Space running in Docker
+- Python 3.10+ with `requests` and `python-dotenv`
+- Copy `.env.example` to `.env` and set your keys
 
-## Deployment Process
+## Quick Start
 
 ```bash
-# 1. Generate descriptions (one-time, requires OPENROUTER_API_KEY)
-python3 generate_descriptions.py
+# Deploy Cambridge journals (dry-run first)
+./run.sh deploy /home/azureuser/datasets/cambridge_loader /root/datasets/cambridge_loader \
+  --port 8086 \
+  --tags "cambridge,rag,journal" \
+  --name-tpl "{name}-journal-oa" \
+  --slug-tpl "{name}-oa" \
+  --generate-missing \
+  --publish \
+  --dry-run
 
-# 2. Delete existing resources (if redeploying)
-python3 main.py delete --dry-run   # preview
-python3 main.py delete --yes       # execute
-
-# 3. Deploy datasets + endpoints
-python3 main.py deploy --dry-run   # preview
-python3 main.py deploy             # execute
-
-# 4. Publish to marketplaces
-python3 main.py publish --dry-run  # preview
-python3 main.py publish            # execute
+# Remove --dry-run to execute
 ```
+
+## run.sh (Recommended)
+
+Wrapper script that simplifies `main.py` usage.
+
+```bash
+# Deploy
+./run.sh deploy <source-dir> <container-dir> [--port PORT] [--tags TAGS] \
+  [--name-tpl TPL] [--slug-tpl TPL] [--generate-missing] [--publish] [--dry-run] [--limit N]
+
+# List
+./run.sh list [--port PORT] [--datasets] [--endpoints]
+
+# Delete
+./run.sh delete [--port PORT] [--datasets] [--endpoints] [--yes] [--dry-run]
+
+# Publish unpublished endpoints
+./run.sh publish [--port PORT] [--dry-run]
+
+# Generate AI descriptions
+./run.sh generate <source-dir> [--port PORT] [--dry-run] [--limit N]
+```
+
+`--port` defaults to 8080. The API key is auto-detected from the Docker container on that port.
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `list` | List deployed datasets and endpoints |
-| `deploy` | Create datasets and endpoints |
-| `delete` | Delete datasets and/or endpoints |
-| `publish` | Publish endpoints to marketplaces |
-| `update` | Update endpoint descriptions |
+| Command    | Description                          |
+|------------|--------------------------------------|
+| `deploy`   | Deploy datasets and endpoints        |
+| `list`     | List deployed datasets and endpoints |
+| `delete`   | Delete datasets and/or endpoints     |
+| `publish`  | Publish endpoints to marketplaces    |
+| `update`   | Update endpoint descriptions         |
+| `generate` | Generate AI descriptions via OpenRouter |
 
-## Usage Examples
+## Deploy Details
 
-### List Resources
+Each subdirectory under `--source-dir` becomes one dataset + one endpoint.
 
-```bash
-python3 main.py list              # list all
-python3 main.py list --datasets   # datasets only
-python3 main.py list --endpoints  # endpoints only
-```
+**`--publish` flag:** When set, each endpoint is published to the SyftHub marketplace immediately after creation. This calls the `/endpoints/{slug}/publish` API, which syncs the endpoint metadata to the configured marketplace (default: `https://syfthub.openmined.org`).
 
-### Deploy
+**Description resolution order:**
+1. `journal_description.md` in the dataset directory (if exists)
+2. `--descriptions` JSON file (fallback)
+3. AI-generated via OpenRouter (when `--generate-missing` is set)
 
-```bash
-python3 main.py deploy --dry-run          # preview
-python3 main.py deploy --limit 5          # deploy first 5
-python3 main.py deploy --resume           # resume interrupted deploy
-python3 main.py deploy --delay 0.5        # custom delay between API calls
-```
+**Slug handling:**
+- Slugs are auto-sanitized (lowercased, spaces to hyphens)
+- Truncated to 63 chars at word boundaries, preserving the trailing suffix (e.g. `-oa`)
+- The 63-char limit matches the SyftHub marketplace constraint
 
-### Delete
+**File types** are auto-detected from the first dataset directory if `--file-types` is not specified.
 
-```bash
-python3 main.py delete --dry-run          # preview all deletions
-python3 main.py delete --endpoints --dry-run  # preview endpoint deletions only
-python3 main.py delete --datasets --dry-run   # preview dataset deletions only
-python3 main.py delete --yes              # delete all (skip confirmation)
-```
+## Publish Details
 
-### Publish
+The `publish` command syncs endpoints to the configured SyftHub marketplace. An endpoint is considered unpublished if:
+- Its `published` flag is `false`, **or**
+- Its `published_to` list is empty (locally marked published but never synced to a marketplace)
+
+This ensures endpoints that were created with `--publish` on older versions (which only set the local flag without syncing) are picked up and published correctly.
 
 ```bash
-python3 main.py publish --dry-run         # preview
-python3 main.py publish --limit 10        # publish first 10
+# Dry-run to see what would be published
+./run.sh publish --port 8086 --dry-run
+
+# Publish all unsynced endpoints
+./run.sh publish --port 8086
+
+# Publish a limited batch
+./run.sh publish --port 8086 --limit 10
 ```
 
-### Update Descriptions
+## Running Containers
 
-```bash
-python3 main.py update --dry-run          # preview
-python3 main.py update --resume           # skip already updated
-```
+| Container | Port | API Key |
+|-----------|------|---------|
+| space-openmined-data | 8080 | `docker inspect space-openmined-data` |
+| space-cambridge-press | 8086 | `docker inspect space-cambridge-press` |
+| space-unknown | 8088 | `docker inspect space-unknown` |
+| space-nature-oa | 8095 | `docker inspect space-nature-oa` |
+| space-openmined-models | 8098 | `docker inspect space-openmined-models` |
 
-## Running with tmux
-
-For long-running operations:
-
-```bash
-# Start a new tmux session
-tmux new -s deploy
-
-# Run the command
-python3 main.py deploy 2>&1 | tee deploy.log
-
-# Detach: Ctrl+B, then D
-
-# Reattach later
-tmux attach -t deploy
-
-# List sessions
-tmux ls
-
-# Kill session when done
-tmux kill-session -t deploy
-```
-
-## Files
-
-| File | Description |
-|------|-------------|
-| `main.py` | Consolidated deployment CLI |
-| `generate_descriptions.py` | Generate journal descriptions (standalone) |
-| `journal_descriptions.json` | AI-generated journal descriptions |
-| `progress.json` | Tracks deploy/update progress |
+Access the frontend: `http://<host>:<port>/frontend/`
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SYFT_API_URL` | `http://localhost:8080/api/v1` | Syft Space API URL |
-| `SYFT_ADMIN_API_KEY` | `fancy_api_key_874658643543` | Admin API key |
-| `OPENROUTER_API_KEY` | (required) | For generate_descriptions.py |
+Set in `.env` (auto-loaded via python-dotenv):
 
-## Naming Convention
+| Variable             | Default                              | Description       |
+|----------------------|--------------------------------------|-------------------|
+| `SYFT_API_URL`       | `http://localhost:8080/api/v1`       | Syft Space API URL |
+| `SYFT_ADMIN_API_KEY` | (auto-detected from Docker)          | Admin API key     |
+| `OPENROUTER_API_KEY` | (required for `generate`)            | OpenRouter API key |
+| `OPENROUTER_MODEL`   | `anthropic/claude-3.5-sonnet`        | Model for description generation |
 
-| Resource | Pattern | Example |
-|----------|---------|---------|
-| Dataset | `{journal}-journal-oa` | `acta-numerica-journal-oa` |
-| Endpoint slug | `{journal}-oa` | `acta-numerica-oa` |
-| Endpoint name | `{journal}-oa` | `acta-numerica-oa` |
+## Project Structure
 
-## Troubleshooting
-
-### Check API Connection
-
-```bash
-curl -s http://localhost:8080/health
-curl -s -H "Authorization: Bearer fancy_api_key_874658643543" \
-  http://localhost:8080/api/v1/datasets/types/
 ```
-
-### Check Progress
-
-```bash
-cat progress.json | python3 -m json.tool
-```
-
-### Reset Progress
-
-```bash
-rm progress.json
+deploy-syft-space/
+├── run.sh               # Bash wrapper for main.py
+├── main.py              # CLI entry point (argparse + dispatch)
+├── client.py            # SyftClient API wrapper
+├── utils.py             # Dataset discovery, slugify, file type detection, progress tracking
+├── commands/
+│   ├── __init__.py
+│   ├── list.py          # list command
+│   ├── deploy.py        # deploy command
+│   ├── delete.py        # delete command
+│   ├── publish.py       # publish command
+│   ├── update.py        # update command
+│   └── generate.py      # generate command (AI descriptions)
+├── .env                 # Environment variables (not committed)
+└── README.md
 ```
